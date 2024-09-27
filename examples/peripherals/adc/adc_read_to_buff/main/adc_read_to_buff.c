@@ -10,9 +10,10 @@
 
 #define ADC_GET_CHANNEL(p_data)     ((p_data)->type2.channel)
 #define ADC_GET_DATA(p_data)        ((p_data)->type2.data)
-#define SAMPLE_SIZE                    256
+#define SAMPLE_SIZE                    1024
 
 static TaskHandle_t s_task_handle;
+float buff[SAMPLE_SIZE] = {0};
 
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
 {
@@ -28,13 +29,14 @@ static void continuous_adc_init(adc_channel_t channel, adc_continuous_handle_t *
     adc_continuous_handle_t handle = NULL;
 
     adc_continuous_handle_cfg_t adc_config = {
-        .max_store_buf_size = 1024,
+        .max_store_buf_size = 2 * SAMPLE_SIZE,
         .conv_frame_size = SAMPLE_SIZE,
+        // .flush_pool = 1, //XXX not working, need to handle internal buffer overflow
     };
     ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
 
     adc_continuous_config_t dig_cfg = {
-        .sample_freq_hz = 10 * 1000,
+        .sample_freq_hz = 20 * 1000,
         .conv_mode = ADC_CONV_SINGLE_UNIT_1,
         .format = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
     };
@@ -56,7 +58,6 @@ void app_main(void)
     esp_err_t ret;
     uint32_t ret_num = 0;
     uint8_t result[SAMPLE_SIZE] = {0};
-    float buff[SAMPLE_SIZE] = {0};
     memset(result, 0xcc, SAMPLE_SIZE);
 
     s_task_handle = xTaskGetCurrentTaskHandle();
@@ -84,17 +85,13 @@ void app_main(void)
     while (1) {
             ret = adc_continuous_read(handle, result, SAMPLE_SIZE, &ret_num, 0);
             if (ret == ESP_OK) {
+                memset(buff, 0, sizeof(buff));
                 ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
                 for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
                     adc_digi_output_data_t *p = (adc_digi_output_data_t*)&result[i];
-                    buff[i] = ADC_GET_DATA(p);
                     /* Check the channel number validation, the data is invalid if the channel num exceed the maximum channel */
-                    // uint32_t chan_num = ADC_GET_CHANNEL(p);
-                    // if (chan_num < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1)) {
-                    //     ESP_LOGI("ADC", "Unit:  Channel: %"PRIu32", Value: %"PRIu32,  chan_num, data);
-                    // } else {
-                    //     ESP_LOGW("ADC", "Invalid data [%"PRIu32"_%"PRIu32"]",  chan_num, data);
-                    // }
+                    if (ADC_GET_CHANNEL(p) < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1))
+                        buff[i] = ADC_GET_DATA(p);
                 }
                 dsps_view(buff, ret_num, 128, 32,  -100, 5000, '|');
                 /**
