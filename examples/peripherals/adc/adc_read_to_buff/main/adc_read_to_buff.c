@@ -20,6 +20,8 @@ static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_c
     BaseType_t mustYield = pdFALSE;
     //Notify that ADC continuous driver has done enough number of conversions
     vTaskNotifyGiveFromISR(s_task_handle, &mustYield);
+    for (uint32_t i = 0; i < edata->size; i++)
+        buff[i] = edata->conv_frame_buffer[i];
 
     return (mustYield == pdTRUE);
 }
@@ -31,7 +33,6 @@ static void continuous_adc_init(adc_channel_t channel, adc_continuous_handle_t *
     adc_continuous_handle_cfg_t adc_config = {
         .max_store_buf_size = 2 * SAMPLE_SIZE,
         .conv_frame_size = SAMPLE_SIZE,
-        // .flush_pool = 1, //XXX not working, need to handle internal buffer overflow
     };
     ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
 
@@ -55,8 +56,6 @@ static void continuous_adc_init(adc_channel_t channel, adc_continuous_handle_t *
 
 void app_main(void)
 {
-    esp_err_t ret;
-    uint32_t ret_num = 0;
     uint8_t result[SAMPLE_SIZE] = {0};
     memset(result, 0xcc, SAMPLE_SIZE);
 
@@ -81,30 +80,8 @@ void app_main(void)
          * `adc_continuous_read()` here in a loop, with/without a certain block timeout.
          */
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    while (1) {
-            ret = adc_continuous_read(handle, result, SAMPLE_SIZE, &ret_num, 0);
-            if (ret == ESP_OK) {
-                memset(buff, 0, sizeof(buff));
-                ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
-                for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
-                    adc_digi_output_data_t *p = (adc_digi_output_data_t*)&result[i];
-                    /* Check the channel number validation, the data is invalid if the channel num exceed the maximum channel */
-                    if (ADC_GET_CHANNEL(p) < SOC_ADC_CHANNEL_NUM(ADC_UNIT_1))
-                        buff[i] = ADC_GET_DATA(p);
-                }
-                dsps_view(buff, ret_num, 128, 32,  -100, 5000, '|');
-                /**
-                 * Because printing is slow, so every time you call `ulTaskNotifyTake`, it will immediately return.
-                 * To avoid a task watchdog timeout, add a delay here. When you replace the way you process the data,
-                 * usually you don't need this delay (as this task will block for a while).
-                 */
-                vTaskDelay(1);
-            } else if (ret == ESP_ERR_TIMEOUT) {
-                //We try to read `SAMPLE_SIZE` until API returns timeout, which means there's no available data
-                break;
-            }
-        }
+        dsps_view(buff, SAMPLE_SIZE, 128, 32,  0, 512, '|');
+        vTaskDelay(1);
     }
 
     ESP_ERROR_CHECK(adc_continuous_stop(handle));
